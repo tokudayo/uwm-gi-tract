@@ -1,0 +1,20 @@
+---
+    df_path       : 'train_2.csv'
+    seed          : 101
+    debug         : False 
+    exp_name      : 'Baselinev2'
+    comment       : 'unet-efficientnet_b1-224x224-aug2-split2'
+    model_name    : 'Unet'
+    backbone      : 'efficientnet-b1'
+    train_bs      : 32
+    valid_bs      : 32
+    num_workers   : 4
+    img_size      : [224, 224]
+    epochs        : 20
+    lr            : 2.0e-3
+    scheduler     : 'CosineAnnealingLR'
+    weight_decay  : 1.0e-6
+    n_accumulate  : 1
+    n_fold        : 5
+    num_classes   : 3
+    device        : 'auto' # 'auto', 'cuda', or 'cpu'
