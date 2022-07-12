@@ -11,11 +11,18 @@ from torch.cuda import amp
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import torch.nn.functional as F
 
 import wandb
 from dataset import BuildDataset
-from models import build_model, criterion, dice_coef, iou_coef, load_model
+from experimental.unext import UNext
+from models import build_model, criterion, dice_coef, iou_coef, load_model, sdloss
+from unet import Unet
 from utils import prepare_loaders, read_data, show_img, load_yaml
+from torch.nn import BCEWithLogitsLoss
+
+from experimental import gcvit_unet
+
 
 
 def train_one_epoch(model, optimizer, scheduler, dataloader, device, epoch, n_accumulate=1):
@@ -34,8 +41,14 @@ def train_one_epoch(model, optimizer, scheduler, dataloader, device, epoch, n_ac
         
         with amp.autocast():
             y_pred = model(images)
-            loss   = criterion(y_pred, masks)
-            loss   = loss / n_accumulate
+            y_ref = y_pred[-1].clone().detach()
+            # Supervised Loss
+            loss   = criterion(y_pred[-1], masks)
+            loss   = loss
+            # Self-distillation loss
+            for out in y_pred[:-1]:
+                loss += sdloss(out, masks, y_ref)
+            loss /= n_accumulate
             
         scaler.scale(loss).backward()
     
@@ -128,11 +141,11 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
         history['Valid Jaccard'].append(val_jaccard)
         
         # Log the metrics
-        wandb.log({"Train Loss": train_loss, 
-                   "Valid Loss": val_loss,
-                   "Valid Dice": val_dice,
-                   "Valid Jaccard": val_jaccard,
-                   "LR":scheduler.get_last_lr()[0]})
+        # wandb.log({"Train Loss": train_loss, 
+        #            "Valid Loss": val_loss,
+        #            "Valid Dice": val_dice,
+        #            "Valid Jaccard": val_jaccard,
+        #            "LR":scheduler.get_last_lr()[0]})
         
         print(f'Valid Dice: {val_dice:0.4f} | Valid Jaccard: {val_jaccard:0.4f}')
         
@@ -142,9 +155,9 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
             best_dice    = val_dice
             best_jaccard = val_jaccard
             best_epoch   = epoch
-            run.summary["Best Dice"]    = best_dice
-            run.summary["Best Jaccard"] = best_jaccard
-            run.summary["Best Epoch"]   = best_epoch
+            # run.summary["Best Dice"]    = best_dice
+            # run.summary["Best Jaccard"] = best_jaccard
+            # run.summary["Best Epoch"]   = best_epoch
             best_model_wts = copy.deepcopy(model.state_dict())
             PATH = "best.pth"
             torch.save(model.state_dict(), PATH)
@@ -216,20 +229,29 @@ if __name__ == "__main__":
         print(f'#'*15)
         print(f'### Fold: {fold} ###')
         print(f'#'*15)
-        run = wandb.init(project='uw-maddison-gi-tract', 
-                        config={k:v for k, v in dict(vars(CFG)).items() if '__' not in k},
-                        name=f"fold-{fold}|dim-{CFG.img_size[0]}x{CFG.img_size[1]}|model-{CFG.model_name}",
-                        group=CFG.comment,
-                        )
+        # run = wandb.init(project='uw-maddison-gi-tract', 
+        #                 config={k:v for k, v in dict(vars(CFG)).items() if '__' not in k},
+        #                 name=f"fold-{fold}|dim-{CFG.img_size[0]}x{CFG.img_size[1]}|model-{CFG.model_name}",
+        #                 group=CFG.comment,
+        #                 )
         train_loader, valid_loader = prepare_loaders(CFG, df, fold, data_transforms, debug=CFG.debug)
-        model     = build_model(CFG)
-        optimizer = optim.Adam(model.parameters(), lr=CFG.lr, weight_decay=CFG.weight_decay)
+        model = Unet(encoder_name=CFG.backbone,      # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
+                     encoder_weights="imagenet",     # use `imagenet` pre-trained weights for encoder initialization
+                     in_channels=3,                  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
+                     classes=CFG.num_classes,        # model output channels (number of classes in your dataset)
+                     activation=None).to(CFG.device) 
+        # model     = build_model(CFG)
+        # model = gcvit_unet().to(CFG.device)
+        # model = UNext().to(CFG.device)
+        optimizer = optim.AdamW(model.parameters(), lr=CFG.lr, weight_decay=CFG.weight_decay)
         scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
                                                    T_max=CFG.epochs*len(train_loader) + 50)
         model, history = run_training(model, optimizer, scheduler,
                                     device=CFG.device,
                                     num_epochs=CFG.epochs)
-        run.finish()
+        # run.finish()
+
+    torch.save(model.state_dict(), 'model.pth')
 
     test_dataset = BuildDataset(df.query("fold==0 & empty==0").sample(frac=1.0), label=False, 
                                 transforms=data_transforms['valid'])

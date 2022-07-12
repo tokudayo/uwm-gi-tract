@@ -1,5 +1,8 @@
 import torch
 import segmentation_models_pytorch as smp
+import torch.nn as nn
+from torch.nn import BCEWithLogitsLoss
+import torch.nn.functional as F
 
 def build_model(CFG):
     model = smp.Unet(
@@ -21,7 +24,7 @@ def load_model(path):
 
 JaccardLoss = smp.losses.JaccardLoss(mode='multilabel')
 DiceLoss    = smp.losses.DiceLoss(mode='multilabel')
-BCELoss     = smp.losses.SoftBCEWithLogitsLoss()
+BCELoss     = smp.losses.SoftBCEWithLogitsLoss(smooth_factor=0.0)
 LovaszLoss  = smp.losses.LovaszLoss(mode='multilabel', per_image=False)
 TverskyLoss = smp.losses.TverskyLoss(mode='multilabel', log_loss=False)
 
@@ -43,3 +46,31 @@ def iou_coef(y_true, y_pred, thr=0.5, dim=(2,3), epsilon=0.001):
 
 def criterion(y_pred, y_true):
     return 0.5*BCELoss(y_pred, y_true) + 0.5*TverskyLoss(y_pred, y_true)
+
+class SdLoss(nn.Module):
+    def __init__(self, alpha, reduction='mean'):
+        super().__init__()
+        self.criterion = BCEWithLogitsLoss(reduction=reduction)
+        self.alpha = alpha
+        self.reduction = reduction
+    
+    def forward(self, y_pred, y_true, y_ref, alpha=None):
+        if alpha is None:
+            alpha = self.alpha
+        with torch.no_grad():
+            y_true = y_true.clone().detach()
+            y_ref = F.sigmoid(y_ref.clone().detach())
+            scale1 = y_pred.shape[-1]/y_true.shape[-1]
+            scale2 = y_pred.shape[-1]/y_ref.shape[-1]
+            y_true = F.interpolate(y_true, scale_factor=scale1, mode='bilinear', align_corners=False)
+            y_ref = F.interpolate(y_ref, scale_factor=scale2, mode='bilinear', align_corners=False)
+        y = alpha*y_ref + (1-alpha)*y_true
+        loss = self.criterion(y_pred, y)
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            raise ValueError('reduction should be mean/sum; got {}'.format(self.reduction))
+
+sdloss = SdLoss(alpha=0.5)
