@@ -17,4 +17,5 @@
     n_accumulate  : 1
     n_fold        : 5
     num_classes   : 3
+    num_pool      : 64
     device        : 'auto' # 'auto', 'cuda', or 'cpu'
