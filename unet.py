@@ -22,6 +22,13 @@ class SegmentationModel(torch.nn.Module):
         masks = self.segmentation_head(*decoder_outputs)
 
         return masks
+    
+    def predict(self, x):
+        features = self.encoder(x)
+        decoder_outputs = self.decoder(*features)
+        # masks = decoder_outputs
+        masks = self.segmentation_head(*decoder_outputs)
+        return masks[-1]
 
 
 class SdSegmentationHead(nn.Module):

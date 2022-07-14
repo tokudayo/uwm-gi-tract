@@ -92,7 +92,7 @@ def valid_one_epoch(model, dataloader, optimizer, device, epoch):
         
         batch_size = images.size(0)
         
-        y_pred  = model(images)
+        y_pred  = model.predict(images)
         loss    = criterion(y_pred, masks)
         
         running_loss += (loss.item() * batch_size)
@@ -159,11 +159,8 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
             # run.summary["Best Jaccard"] = best_jaccard
             # run.summary["Best Epoch"]   = best_epoch
             best_model_wts = copy.deepcopy(model.state_dict())
-            PATH = "best.pth"
             torch.save(model.state_dict(), PATH)
 
-            
-        PATH = "last.path"
         torch.save(model.state_dict(), PATH)
             
         print(); print()
@@ -225,7 +222,7 @@ if __name__ == "__main__":
             ], p=1.0)
     }
 
-    for fold in range(1):
+    for fold in range(0, 5):
         print(f'#'*15)
         print(f'### Fold: {fold} ###')
         print(f'#'*15)
@@ -249,24 +246,8 @@ if __name__ == "__main__":
         model, history = run_training(model, optimizer, scheduler,
                                     device=CFG.device,
                                     num_epochs=CFG.epochs)
+        torch.save(model.state_dict(), f'out/best_{fold}.pth')
+        
         # run.finish()
 
     torch.save(model.state_dict(), 'model.pth')
-
-    test_dataset = BuildDataset(df.query("fold==0 & empty==0").sample(frac=1.0), label=False, 
-                                transforms=data_transforms['valid'])
-    test_loader  = DataLoader(test_dataset, batch_size=CFG.valid_bs, 
-                            num_workers=4, shuffle=False, pin_memory=True)
-    imgs = next(iter(test_loader))
-    imgs = imgs.to(CFG.device, dtype=torch.float)
-
-    preds = []
-    for fold in range(1):
-        model = load_model(f"best_epoch-{fold:02d}.bin")
-        with torch.no_grad():
-            pred = model(imgs)
-            pred = (nn.Sigmoid()(pred)>0.5).double()
-        preds.append(pred)
-
-    imgs  = imgs.cpu().detach()
-    preds = torch.mean(torch.stack(preds, dim=0), dim=0).cpu().detach()
